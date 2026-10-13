@@ -1,0 +1,5 @@
+# Firmware must remain local; this project distributes no firmware binaries.
+*.rom
+*.ROM
+*.bin
+VFCT*
