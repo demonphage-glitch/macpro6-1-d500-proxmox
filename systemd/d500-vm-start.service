@@ -1,0 +1,12 @@
+[Unit]
+Description=Start VM with Apple FirePro D500 passthrough
+After=pve-guests.service
+Requires=pve-guests.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/d500-vm-start
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
