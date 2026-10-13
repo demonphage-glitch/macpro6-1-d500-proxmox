@@ -1,0 +1,296 @@
+#!/bin/bash
+
+set -u
+
+VMID=103
+
+GPU="0000:06:00.0"
+AUDIO="0000:06:00.1"
+
+GPU_PATH="/sys/bus/pci/devices/$GPU"
+AUDIO_PATH="/sys/bus/pci/devices/$AUDIO"
+
+QMP_SOCKET="/run/qemu-server/${VMID}.qmp"
+
+TAG="d500-jellyfin"
+
+log() {
+    echo "$*"
+    logger -t "$TAG" -- "$*"
+}
+
+fail() {
+    log "ERROR: $*"
+    exit 1
+}
+
+device_present() {
+    [ -e "$1" ]
+}
+
+driver_name() {
+    basename "$(readlink -f "$1/driver" 2>/dev/null)" 2>/dev/null
+}
+
+verify_vfio() {
+    local gpu_driver
+    local audio_driver
+
+    device_present "$GPU_PATH" ||
+        fail "$GPU is not present"
+
+    device_present "$AUDIO_PATH" ||
+        fail "$AUDIO is not present"
+
+    gpu_driver="$(driver_name "$GPU_PATH")"
+    audio_driver="$(driver_name "$AUDIO_PATH")"
+
+    log "Drivers: GPU=$gpu_driver AUDIO=$audio_driver"
+
+    [ "$gpu_driver" = "vfio-pci" ] ||
+        fail "$GPU is not bound to vfio-pci"
+
+    [ "$audio_driver" = "vfio-pci" ] ||
+        fail "$AUDIO is not bound to vfio-pci"
+}
+
+wake_d500() {
+    device_present "$GPU_PATH" ||
+        fail "$GPU is not present"
+
+    device_present "$AUDIO_PATH" ||
+        fail "$AUDIO is not present"
+
+    log "Waking D500 GPU and audio functions"
+
+    echo on > "$GPU_PATH/power/control" ||
+        fail "Could not wake $GPU"
+
+    echo on > "$AUDIO_PATH/power/control" ||
+        fail "Could not wake $AUDIO"
+
+    sleep 2
+
+    local gpu_power
+    local audio_power
+
+    gpu_power="$(cat "$GPU_PATH/power_state" 2>/dev/null)"
+    audio_power="$(cat "$AUDIO_PATH/power_state" 2>/dev/null)"
+
+    log "Power state after wake: GPU=$gpu_power AUDIO=$audio_power"
+
+    [ "$gpu_power" = "D0" ] ||
+        fail "$GPU did not reach D0"
+
+    [ "$audio_power" = "D0" ] ||
+        fail "$AUDIO did not reach D0"
+}
+
+wait_for_vm_stopped() {
+    local timeout=30
+    local elapsed=0
+
+    while [ "$elapsed" -lt "$timeout" ]; do
+        if qm status "$VMID" 2>/dev/null | grep -q "status: stopped"; then
+            return 0
+        fi
+
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    return 1
+}
+
+wait_for_qmp() {
+    local timeout=30
+    local elapsed=0
+
+    while [ "$elapsed" -lt "$timeout" ]; do
+        if [ -S "$QMP_SOCKET" ]; then
+            return 0
+        fi
+
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    return 1
+}
+
+verify_qemu_d500() {
+    python3 - "$QMP_SOCKET" <<'PY'
+import json
+import socket
+import sys
+
+socket_path = sys.argv[1]
+wanted = {"hostpci0.0", "hostpci0.1"}
+
+def find_qdev_ids(obj):
+    found = set()
+
+    if isinstance(obj, dict):
+        qdev = obj.get("qdev_id")
+
+        if qdev in wanted:
+            found.add(qdev)
+
+        for value in obj.values():
+            found |= find_qdev_ids(value)
+
+    elif isinstance(obj, list):
+        for item in obj:
+            found |= find_qdev_ids(item)
+
+    return found
+
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(5)
+    sock.connect(socket_path)
+
+    f = sock.makefile("rwb", buffering=0)
+
+    json.loads(f.readline())
+
+    f.write(b'{"execute":"qmp_capabilities"}\n')
+    capabilities = json.loads(f.readline())
+
+    if "error" in capabilities:
+        sys.exit(1)
+
+    f.write(b'{"execute":"query-pci"}\n')
+    response = json.loads(f.readline())
+
+    if "error" in response:
+        sys.exit(1)
+
+    found = find_qdev_ids(response)
+
+    if found == wanted:
+        sys.exit(0)
+
+    sys.exit(1)
+
+except Exception:
+    sys.exit(1)
+PY
+}
+
+start_and_verify() {
+    local attempt="$1"
+    local check
+    local checks=6
+    local interval=5
+
+    log "Starting VM $VMID: attempt $attempt"
+
+    qm start "$VMID" ||
+        return 1
+
+    if ! wait_for_qmp; then
+        log "QMP socket did not appear on attempt $attempt"
+        return 1
+    fi
+
+    log "Beginning D500 stabilization check on attempt $attempt"
+
+    for check in $(seq 1 "$checks"); do
+        sleep "$interval"
+
+        if verify_qemu_d500; then
+            log "D500 stabilization check $check/$checks PASS"
+        else
+            log "D500 stabilization check $check/$checks FAIL"
+            return 1
+        fi
+    done
+
+    log "D500 remained attached for $((checks * interval)) seconds on attempt $attempt"
+    return 0
+}
+
+
+log "Starting D500-aware startup for VM $VMID"
+
+#
+# Do not interfere with an already-running VM.
+#
+
+if qm status "$VMID" 2>/dev/null | grep -q "status: running"; then
+    log "VM $VMID is already running"
+
+    if [ -S "$QMP_SOCKET" ] && verify_qemu_d500; then
+        log "D500 is already attached correctly; nothing to do"
+        exit 0
+    fi
+
+    fail "VM $VMID is already running but D500 QMP verification failed"
+fi
+
+#
+# Initial host-side sanity checks.
+#
+
+verify_vfio
+wake_d500
+
+#
+# Attempt 1.
+#
+
+if start_and_verify 1; then
+    log "SUCCESS: VM $VMID started with D500 on first attempt"
+    exit 0
+fi
+
+#
+# The first post-cold-boot assignment may leave QEMU running
+# without the D500. Stop that instance and allow VFIO to reclaim
+# both physical functions.
+#
+
+log "First attempt did not acquire D500; stopping VM $VMID"
+
+if qm status "$VMID" 2>/dev/null | grep -q "status: running"; then
+    qm stop "$VMID" ||
+        fail "Could not stop VM after failed first attempt"
+fi
+
+if ! wait_for_vm_stopped; then
+    fail "VM $VMID did not stop within 30 seconds"
+fi
+
+log "VM $VMID stopped after first attempt"
+
+#
+# Allow host PCI/VFIO state to settle.
+#
+
+sleep 2
+
+verify_vfio
+wake_d500
+
+#
+# Attempt 2.
+#
+
+if start_and_verify 2; then
+    log "SUCCESS: VM $VMID started with D500 on second attempt"
+    exit 0
+fi
+
+#
+# Do not enter an endless retry cycle.
+#
+
+log "Second attempt failed D500 QMP verification"
+
+if qm status "$VMID" 2>/dev/null | grep -q "status: running"; then
+    log "Stopping VM $VMID after second failed attempt"
+    qm stop "$VMID" || true
+fi
+
+fail "D500 startup failed after two attempts; manual investigation required"
