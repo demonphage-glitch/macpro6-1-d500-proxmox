@@ -1,5 +1,10 @@
 # Apple FirePro D500 passthrough on Proxmox
 
+If you're wondering why in the h*ll I did this, it's because there was no answer or workaround I could find on the internet. I searched for many, many, many months too, and no one seemed to have an answer.
+If you're wondering why I would run Proxmox on an old trashcan mac, well it's because it was lying around my house and I like the way it looks. 
+Why not run OpenCore on it and use MacOS? Because I didn't want to...
+Did I use AI on this project? Yes, so be mad about if you want, I don't care. It's fixed/solved/working and that's what matters in the end, right?
+
 A tested startup workaround for one Apple Mac Pro 6,1 (Late 2013) with dual FirePro D500 GPUs. The important discovery: **a running VM does not prove that its GPU remained attached**. The V3 helper verifies both QEMU PCI functions every five seconds for a nominal 30-second window and automatically performs one second start after a failed first assignment.
 
 Tested on October 13, 2026 with Proxmox VE 9.2.21, kernel 7.0.14-20-pve, QEMU package pve-qemu-kvm_11.0.3-4, and Ubuntu Server 24.04. This records that environment; it does not guarantee behavior on other firmware, hardware, or software versions.
