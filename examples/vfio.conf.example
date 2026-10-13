@@ -1,0 +1,8 @@
+# Review your PCI devices and IOMMU groups before installing.
+# Both D500s share 1002:679e; ID binding can reserve BOTH cards.
+# Likewise, 1002:aaa0 may match more than one audio function.
+# Ensure the host does not need these devices; retain remote access.
+options vfio-pci ids=1002:679e,1002:aaa0 disable_vga=1
+# The tested host also used Intel ID 8086:1d20 in its VFIO configuration.
+# It is deliberately omitted here. It is host-specific, not a D500 requirement.
+# Identify every device and its group before deciding which IDs to reserve.
