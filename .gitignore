@@ -3,3 +3,5 @@
 *.ROM
 *.bin
 VFCT*
+__pycache__/
+*.pyc
