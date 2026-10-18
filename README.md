@@ -11,6 +11,8 @@ Tested on October 13, 2026 with Proxmox VE 9.2.21, kernel 7.0.14-20-pve, QEMU pa
 
 ## Downloads and repository contents
 
+**Experimental setup assistant:** [Guided installation, local VFCT extraction, validation, and rollback](docs/setup-tool.md). Run `python3 tools/d500-setup.py` for the menu. The new installer needs physical-host testing; it preserves the previously tested V3 recovery helper and requires existing IOMMU/VFIO preparation.
+
 - [Full PDF guide](docs/Apple_FirePro_D500_Proxmox_Passthrough_Guide.pdf)
 - [Editable Word guide](docs/Apple_FirePro_D500_Proxmox_Passthrough_Guide.docx)
 - [V3 recovery helper](scripts/d500-vm-start)
@@ -113,7 +115,7 @@ The tested table was 131,232 bytes. Images began at `0x68` and `0x10084`; preced
 | `113-C3861LA-029` | `02:00.0` | `106b:0126` |
 | `113-C3861LB-029` | `06:00.0` | `106b:0125` |
 
-These offsets and mappings are specific to the tested table. Do not split another table at those offsets without parsing and validation. This repository does not include a general VFCT extractor; the original guide records the discovery and validation evidence.
+These offsets and mappings are specific to the tested table. Do not split another table at those offsets without parsing and validation. The [experimental setup assistant](docs/setup-tool.md) now includes a conservative VFCT parser and extractor for the supported legacy ROM layout. The original guide records the discovery and validation evidence.
 
 Reference SHA-256 fingerprints from **the tested machine only**:
 
